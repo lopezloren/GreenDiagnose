@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Result - GreenDiagnose</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="home-container">
+        <h2 style="color: #3b5a40;">Diagnosis Complete</h2>
+        
+        <div style="background-color: white; border: 2px solid #a3b899; padding: 20px; border-radius: 12px; margin-bottom: 30px; text-align: left;">
+            
+            <h3 style="color: #2c3e2d; margin-top: 0;">{{ diagnosis }}</h3>
+            <p style="color: #5a7a5f; margin-bottom: 5px;">
+                <strong>Combined Confidence:</strong> {{ confidence }}
+            </p>
+            
+            <hr style="border: 0; border-top: 1px solid #e5e9de; margin: 15px 0;">
+            
+            <h4 style="color: #3b5a40; margin-top: 0;">Care Instructions:</h4>
+            <ul style="color: #2c3e2d; padding-left: 20px; font-size: 0.95rem; line-height: 1.5;">
+                {% for treatment in treatments %}
+                    <li>{{ treatment }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        
+        <a href="/" class="btn" style="text-align: center; box-sizing: border-box;">Diagnose Another Plant</a>
+    </div>
+</body>
+</html>

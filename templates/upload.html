@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload - GreenDiagnose</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="home-container">
+        <h2 style="color: #3b5a40; text-align: left;">Show us the leaf</h2>
+        
+        <form action="/analyze" method="POST" enctype="multipart/form-data">
+            
+            <label style="text-align: left; display: block; color: #5a7a5f; margin-bottom: 0.5rem; font-weight: bold;">Plant species</label>
+            <select name="species_id" style="width: 100%; padding: 12px; margin-bottom: 20px; border-radius: 8px; border: 1px solid #ccc; font-size: 1rem; background-color: white;">
+                {% for s in species %}
+                <option value="{{ s['id'] }}">{{ s['common_name'] }} ({{ s['scientific_name'] }})</option>
+                {% endfor %}
+            </select>
+            
+            <!-- Upgraded Upload Box -->
+            <div style="border: 2px dashed #a3b899; padding: 30px 20px; border-radius: 12px; margin-bottom: 30px; background-color: white;">
+                <p style="margin-top: 0; color: #7f9976; margin-bottom: 20px;">Select an image source</p>
+                
+                <!-- The actual file input is now hidden -->
+                <input type="file" id="imageInput" name="file" accept="image/*" required style="display: none;">
+                
+                <!-- Two explicit buttons for the user to tap -->
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" id="btnCamera" style="flex: 1; padding: 12px; background-color: #f4f6f0; border: 2px solid #3b5f41; color: #3b5f41; border-radius: 8px; font-weight: bold; cursor: pointer;">Take Photo</button>
+                    <button type="button" id="btnGallery" style="flex: 1; padding: 12px; background-color: #f4f6f0; border: 2px solid #3b5f41; color: #3b5f41; border-radius: 8px; font-weight: bold; cursor: pointer;">Choose File</button>
+                </div>
+                
+                <!-- This will display the file name once they select a photo -->
+                <p id="fileNameDisplay" style="margin-top: 15px; font-size: 0.9rem; color: #3b5a40; font-weight: bold;"></p>
+            </div>
+            
+            <button type="submit" class="btn">Continue</button>
+
+            <label>
+    <input type="checkbox" name="consent_for_training" value="1" required>
+    I consent to allow my anonymized image to be used for future AI model training.
+</label>
+        </form>
+    </div>
+
+    <!-- JavaScript to make the buttons trigger the hidden file input -->
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const btnCamera = document.getElementById('btnCamera');
+        const btnGallery = document.getElementById('btnGallery');
+        const fileNameDisplay = document.getElementById('fileNameDisplay');
+
+        // When Camera is tapped, add the capture attribute and open it
+        btnCamera.addEventListener('click', () => {
+            imageInput.setAttribute('capture', 'environment');
+            imageInput.click();
+        });
+
+        // When Gallery is tapped, remove the capture attribute and open it
+        btnGallery.addEventListener('click', () => {
+            imageInput.removeAttribute('capture');
+            imageInput.click();
+        });
+
+        // Update the text on the screen so the user knows their photo is attached
+        imageInput.addEventListener('change', () => {
+            if(imageInput.files.length > 0) {
+                fileNameDisplay.textContent = "Selected: " + imageInput.files[0].name;
+            }
+        });
+    </script>
+</body>
+</html>

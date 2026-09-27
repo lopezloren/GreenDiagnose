@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Questionnaire - GreenDiagnose</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="home-container">
+        <h2 style="color: #3b5a40;">Help Us Verify</h2>
+        <p style="color: #5a7a5f; margin-bottom: 20px;">Please answer these quick questions to refine the AI's diagnosis.</p>
+        
+        <form action="/result" method="POST">
+            <!-- Hidden data passed silently to the result route -->
+            <input type="hidden" name="species_id" value="{{ species_id }}">
+            <input type="hidden" name="cnn_disease_id" value="{{ cnn_disease_id }}">
+            <input type="hidden" name="cnn_confidence" value="{{ cnn_confidence }}">
+            
+            <div style="background-color: white; border: 2px solid #a3b899; padding: 20px; border-radius: 12px; margin-bottom: 20px; text-align: left;">
+                
+                <!-- Dynamic Questions Loop -->
+                {% for q in questions %}
+                <div style="margin-bottom: 20px;">
+                    <p style="color: #2c3e2d; margin-bottom: 10px;"><strong>{{ q.question_text }}</strong></p>
+                    <label style="margin-right: 15px;">
+                        <input type="radio" name="symptom_{{ q.id }}" value="yes" required> Yes
+                    </label>
+                    <label>
+                        <input type="radio" name="symptom_{{ q.id }}" value="no"> No
+                    </label>
+                </div>
+                {% endfor %}
+                <!-- End Dynamic Questions Loop -->
+                
+            </div>
+            
+            <button type="submit" class="btn" style="width: 100%; box-sizing: border-box; cursor: pointer;">See Diagnosis</button>
+        </form>
+    </div>
+</body>
+</html>
