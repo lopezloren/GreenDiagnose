@@ -61,7 +61,7 @@ def analyze():
         return "No file uploaded", 400
         
     file = request.files['file']
-    species_id = request.form.get('species_id')
+    species_id =int (request.form.get('species_id'))
     
     if file.filename == '':
         return "No file selected", 400
