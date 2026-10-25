@@ -1,131 +1,210 @@
-"""
-rule_engine.py - GreenDiagnose's forward-chaining, certainty-factor inference engine.
+"""GreenDiagnose diagnosis and adaptive questionnaire rules."""
 
-This is real, runnable logic - not a stub. It works as soon as your
-disease/symptom/disease_symptom_rule tables have real data in them
-(from your team's rule-drafting + horticulturist validation work).
-
-Core idea (certainty-factor model, same lineage as Shortliffe & Buchanan's
-MYCIN - see your Chapter 1 RRL, reference [26]):
-  - Each disease has a set of symptoms, each with a certainty_weight (0.0-1.0)
-    representing how strongly a "yes" answer indicates that disease.
-  - A disease's rule-based score = sum of certainty_weight for every
-    symptom the user answered "yes" to.
-  - The CNN's prediction is treated as an additional weighted input,
-    not a separate parallel answer - this is the "sequential staging"
-    design from your Chapter 2 architecture.
-"""
+import re
 
 from db import fetch_all
 
-# How much weight the CNN's own confidence carries in the final score,
-# relative to the summed rule-based symptom score. Tune this during
-# your Sprint 4 (Expert Validation) based on real test cases - document
-# whatever value you land on, and why, in your Chapter 3 methodology.
 CNN_WEIGHT = 0.5
 RULE_WEIGHT = 0.5
-
-# Below this combined confidence, the UI should show the result as
-# "low confidence" per your Scope's fallback-handling design.
 LOW_CONFIDENCE_THRESHOLD = 0.4
+
+# A disease needs at least this CNN probability to be ranked first.
+# Provisional value; confirm after held-out evaluation and expert review.
+MIN_CNN_SUPPORT = 0.2
+
+CITE_PATTERN = re.compile(r"\s*\[cite:\s*\d+\]")
 
 
 def get_questions_for_species(species_id):
-    """
-    Returns the guided questionnaire questions for this species,
-    ordered for display. Used by the /api/session/<id>/questions route.
-    """
+    """Fetch all symptom questions for a plant species."""
     query = """
         SELECT id, question_text, answer_type, display_order
         FROM symptom
         WHERE species_id = %s
-        ORDER BY display_order ASC
+        ORDER BY display_order, id
     """
     return fetch_all(query, (species_id,))
 
 
-def compute_diagnosis(species_id, predicted_disease_id, cnn_confidence, answers):
-    """
-    Combines the CNN's prediction with questionnaire answers to produce
-    a ranked list of candidate diagnoses for this species.
-
-    Args:
-        species_id: int
-        predicted_disease_id: int or None - the CNN's top guess
-        cnn_confidence: float (0.0-1.0) or None
-        answers: list of dicts like [{"symptom_id": 3, "answer_value": "yes"}, ...]
-
-    Returns:
-        list of dicts, sorted by score descending:
-        [{"disease_id": ..., "disease_name": ..., "confidence": ..., "treatment": ...}, ...]
-    """
-    # Only "yes" answers contribute positive certainty in this basic model.
-    # Extend this if your team wants "no" answers to count as negative
-    # evidence against a disease - a reasonable Sprint 3/4 refinement.
-    yes_symptom_ids = [
-        a["symptom_id"] for a in answers if a.get("answer_value") == "yes"
-    ]
-
-    # Pull every disease for this species, along with the sum of
-    # certainty_weight for any of its rules that matched a "yes" answer.
+def get_questions_for_diagnosis(species_id, predicted_disease_id):
+    """Return predicted-disease questions first, then alternatives."""
     query = """
-        SELECT
-            d.id AS disease_id,
-            d.name AS disease_name,
-            COALESCE(SUM(
-                CASE WHEN dsr.symptom_id IN ({placeholders})
-                     THEN dsr.certainty_weight ELSE 0 END
-            ), 0) AS rule_score
-        FROM disease d
-        LEFT JOIN disease_symptom_rule dsr ON dsr.disease_id = d.id
-        WHERE d.species_id = %s
-        GROUP BY d.id, d.name
+        SELECT DISTINCT
+            s.id,
+            s.question_text,
+            s.answer_type,
+            s.display_order,
+            CASE
+                WHEN dsr.disease_id = %s THEN 0
+                ELSE 1
+            END AS priority
+        FROM symptom s
+        JOIN disease_symptom_rule dsr
+            ON dsr.symptom_id = s.id
+        JOIN disease d
+            ON d.id = dsr.disease_id
+        WHERE s.species_id = %s
+          AND d.species_id = %s
+        ORDER BY priority, s.display_order, s.id
     """
-    if yes_symptom_ids:
-        placeholders = ",".join(["%s"] * len(yes_symptom_ids))
-        query = query.format(placeholders=placeholders)
-        params = tuple(yes_symptom_ids) + (species_id,)
-    else:
-        # No symptoms answered "yes" - still return diseases with 0 rule_score
-        query = query.format(placeholders="NULL")
-        params = (species_id,)
+    return fetch_all(
+        query,
+        (predicted_disease_id, species_id, species_id),
+    )
 
-    candidates = fetch_all(query, params)
 
-    # Normalize rule_score to 0-1 range relative to the highest-scoring
-    # candidate, so it's comparable to the CNN's 0-1 confidence.
-    max_rule_score = max((c["rule_score"] for c in candidates), default=0) or 1
+def get_species_diseases(species_id):
+    """Return every disease for a species, including those without rules."""
+    return fetch_all(
+        "SELECT id, name FROM disease WHERE species_id = %s ORDER BY id",
+        (species_id,),
+    )
+
+
+def symptom_scores_for_species(species_id, answers):
+    """
+    Symptom support per disease, combining Yes answers so the score
+    rises with diminishing returns and never exceeds 1.0.
+    score = 1 - product(1 - weight) over the Yes answers.
+    No answers add no support.
+    """
+    rules = fetch_all(
+        """
+        SELECT dsr.disease_id, dsr.symptom_id, dsr.certainty_weight
+        FROM disease_symptom_rule dsr
+        JOIN disease d ON d.id = dsr.disease_id
+        WHERE d.species_id = %s
+        """,
+        (species_id,),
+    )
+
+    yes_ids = {
+        int(a["symptom_id"]) for a in answers
+        if a.get("answer_value") == "yes"
+    }
+
+    remaining = {}  # disease_id -> product of (1 - weight)
+    for rule in rules:
+        if int(rule["symptom_id"]) not in yes_ids:
+            continue
+        disease_id = int(rule["disease_id"])
+        weight = float(rule["certainty_weight"])
+        remaining[disease_id] = remaining.get(disease_id, 1.0) * (1.0 - weight)
+
+    return {
+        disease_id: 1.0 - product
+        for disease_id, product in remaining.items()
+    }
+
+
+def compute_diagnosis(
+    species_id,
+    predicted_disease_id,
+    cnn_confidence,
+    answers,
+    cnn_scores=None,
+):
+    """
+    Rank every disease for the species using:
+      - CNN probability for each class,
+      - per-disease symptom agreement,
+    and rank CNN-supported diseases above unsupported ones.
+    """
+    diseases = get_species_diseases(species_id)
+
+    if not diseases:
+        return []
+
+    symptom = symptom_scores_for_species(species_id, answers)
+
+    # Healthy has no symptom rules. Its support is the absence of
+    # disease symptoms: 1 minus the strongest disease symptom score.
+    healthy_id = next(
+        (
+            int(d["id"])
+            for d in diseases
+            if str(d["name"]).strip().lower() == "healthy"
+        ),
+        None,
+    )
+
+    if healthy_id is not None:
+        disease_only = [
+            score for disease_id, score in symptom.items()
+            if disease_id != healthy_id
+        ]
+        symptom[healthy_id] = 0.5 * (1.0 - max(disease_only, default=0.0))
+
+    # Full probability per class, e.g. {20: 0.076, 22: 0.901, 21: 0.023}.
+    all_cnn_scores = {
+        int(k): float(v) for k, v in (cnn_scores or {}).items()
+    }
+
+    # Fallback for callers that only pass the top class.
+    if not all_cnn_scores and predicted_disease_id is not None:
+        all_cnn_scores = {
+            int(predicted_disease_id): float(cnn_confidence or 0.0)
+        }
 
     results = []
-    for c in candidates:
-        normalized_rule_score = float(c["rule_score"]) / float(max_rule_score)
 
-        # If this disease is the CNN's predicted one, blend both signals.
-        # Otherwise, it's scored on rule evidence alone.
-        if predicted_disease_id and int(c["disease_id"]) == int(predicted_disease_id) and cnn_confidence:
-            combined_score = (CNN_WEIGHT * float(cnn_confidence)) + (RULE_WEIGHT * normalized_rule_score)
-        else:
-            combined_score = RULE_WEIGHT * normalized_rule_score
+    for disease in diseases:
+        disease_id = int(disease["id"])
+
+        symptom_score = max(0.0, min(1.0, symptom.get(disease_id, 0.0)))
+        cnn_score = max(
+            0.0,
+            min(1.0, all_cnn_scores.get(disease_id, 0.0)),
+        )
+
+        combined_score = (
+            CNN_WEIGHT * cnn_score + RULE_WEIGHT * symptom_score
+        )
 
         results.append({
-            "disease_id": c["disease_id"],
-            "disease_name": c["disease_name"],
-            "confidence": round(combined_score, 4)
+            "disease_id": disease_id,
+            "disease_name": disease["name"],
+            "cnn_score": round(cnn_score, 4),
+            "symptom_score": round(symptom_score, 4),
+            "confidence": round(combined_score, 4),
         })
 
-    results.sort(key=lambda r: r["confidence"], reverse=True)
+    # CNN-supported diseases rank above unsupported ones.
+    # Within each group, sort by combined score.
+    results.sort(
+        key=lambda item: (
+            item["cnn_score"] >= MIN_CNN_SUPPORT,
+            item["confidence"],
+        ),
+        reverse=True,
+    )
 
-    print(f"DEBUG: Final candidate scores: {results}")
-    # Attach treatment text and a low-confidence flag to the top result
     if results:
-        results[0]["is_low_confidence"] = results[0]["confidence"] < LOW_CONFIDENCE_THRESHOLD
-        results[0]["treatment"] = get_treatment(results[0]["disease_id"])
+        results[0]["is_low_confidence"] = (
+            results[0]["confidence"] < LOW_CONFIDENCE_THRESHOLD
+        )
+        results[0]["treatment"] = get_treatment(
+            results[0]["disease_id"]
+        )
 
     return results
 
 
 def get_treatment(disease_id):
-    """Fetches the care/treatment recommendation text for a diagnosed disease."""
-    query = "SELECT recommendation_text FROM treatment WHERE disease_id = %s LIMIT 1"
-    rows = fetch_all(query, (disease_id,))
-    return rows[0]["recommendation_text"] if rows else "No treatment recorded for this condition yet."
+    """Fetch the care recommendation, with citation markers removed."""
+    rows = fetch_all(
+        """
+        SELECT recommendation_text
+        FROM treatment
+        WHERE disease_id = %s
+        LIMIT 1
+        """,
+        (disease_id,),
+    )
+
+    if not rows:
+        return "No treatment recorded for this condition yet."
+
+    text = CITE_PATTERN.sub("", rows[0]["recommendation_text"]).strip()
+
+    return text or "Source pending expert review."
